@@ -1,8 +1,3 @@
-#
-# boot/Makefile
-#       Makefile para el boot
-#
-
 CC=gcc
 CFLAGS= -g -Wall
 

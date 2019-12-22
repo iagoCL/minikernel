@@ -1,8 +1,3 @@
-#
-# usuario/lib/Makefile
-#	Makefile de la biblioteca
-#
-
 INCLUDEDIR=../include
 INCLUDEDIR2=../../minikernel/include
 

@@ -1,13 +1,3 @@
-#
-# usuario/Makefile
-#	Makefile de programas de usuario
-#
-# NOTA: EN LA VERSIÓN INICIAL SÓLO COMPILARÁN CORRECTAMENTE LOS PROGRAMAS
-# init, excep_arit, excep_mem y simplon, YA QUE LOS DEMÁS USAN LLAMADAS QUE
-# NO TIENE QUE IMPLEMENTAR EL ALUMNO 
-#
-
-
 MAKEFLAGS=-k
 INCLUDEDIR=include
 LIBDIR=lib
@@ -17,7 +7,7 @@ BIBLIOTECA=$(LIBDIR)/libserv.a
 CC=cc
 CFLAGS=-Wall -fPIC -Werror -g -I$(INCLUDEDIR)
 
-PROGRAMAS=init excep_arit excep_mem simplon prueba_dormir prueba_tiempos dormilon prueba_mutex1 creador1 creador2 creador3 creador4 abridor prueba_mutex2 mutex1 mutex2 prueba_RR1 yosoy prueba_RR2 mudo prueba_term lector
+PROGRAMAS=init excep_arit excep_mem simplon prueba_dormir dormilon prueba_mutex1 creador1 creador2 creador3 creador4 abridor prueba_mutex2 mutex1 mutex2 prueba_RR1 yosoy prueba_RR2 mudo prueba_term lector
 
 all: biblioteca $(PROGRAMAS)
 
@@ -43,10 +33,6 @@ simplon: simplon.o $(BIBLIOTECA)
 prueba_dormir.o: $(INCLUDEDIR)/servicios.h
 prueba_dormir: prueba_dormir.o $(BIBLIOTECA)
 	$(CC) $(LDFLAGS) -shared -o $@ prueba_dormir.o -L$(LIBDIR) -lserv
-
-prueba_tiempos.o: $(INCLUDEDIR)/servicios.h
-prueba_tiempos: prueba_tiempos.o $(BIBLIOTECA)
-	$(CC) $(LDFLAGS) -shared -o $@ prueba_tiempos.o -L$(LIBDIR) -lserv
 
 dormilon.o: $(INCLUDEDIR)/servicios.h
 dormilon: dormilon.o $(BIBLIOTECA)

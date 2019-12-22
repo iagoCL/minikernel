@@ -1,19 +1,11 @@
 /*
- *  kernel/kernel.c
- *
- *  Minikernel. Versión 1.0
- *
- *  Fernando Pérez Costoya
- *
- */
-
-/*
  *
  * Fichero que contiene la funcionalidad del sistema operativo
  *
  */
 
 #include "kernel.h"	/* Contiene defs. usadas por este modulo */
+#include <string.h>
 
 /*
  *
@@ -23,7 +15,7 @@
  */
 
 /*
- * Función que inicia la tabla de procesos
+ * Funciï¿½n que inicia la tabla de procesos
  */
 static void iniciar_tabla_proc(){
 	int i;
@@ -33,7 +25,7 @@ static void iniciar_tabla_proc(){
 }
 
 /*
- * Función que busca una entrada libre en la tabla de procesos
+ * Funciï¿½n que busca una entrada libre en la tabla de procesos
  */
 static int buscar_BCP_libre(){
 	int i;
@@ -105,20 +97,23 @@ static void eliminar_elem(lista_BCPs *lista, BCP * proc){
 static void espera_int(){
 	int nivel;
 
-	printk("-> NO HAY LISTOS. ESPERA INT\n");
+	printk(/*"-> NO HAY LISTOS. ESPERA INT\n"*/ "");
 
-	/* Baja al mínimo el nivel de interrupción mientras espera */
+	/* Baja al mï¿½nimo el nivel de interrupciï¿½n mientras espera */
 	nivel=fijar_nivel_int(NIVEL_1);
 	halt();
 	fijar_nivel_int(nivel);
 }
 
 /*
- * Función de planificacion que implementa un algoritmo FIFO.
+ * Funciï¿½n de planificacion que implementa un algoritmo FIFO.
  */
 static BCP * planificador(){
-	while (lista_listos.primero==NULL)
+	ticks_restantes  = TICKS_POR_RODAJA;
+	proc_expulsar = NULL;
+	while (lista_listos.primero==NULL) {
 		espera_int();		/* No hay nada que hacer */
+	}
 	return lista_listos.primero;
 }
 
@@ -145,7 +140,7 @@ static void liberar_proceso(){
 
 	liberar_pila(p_proc_anterior->pila);
 	cambio_contexto(NULL, &(p_proc_actual->contexto_regs));
-        return; /* no debería llegar aqui */
+        return; /* no deberï¿½a llegar aqui */
 }
 
 /*
@@ -171,7 +166,7 @@ static void exc_arit(){
 	printk("-> EXCEPCION ARITMETICA EN PROC %d\n", p_proc_actual->id);
 	liberar_proceso();
 
-        return; /* no debería llegar aqui */
+        return; /* no deberï¿½a llegar aqui */
 }
 
 /*
@@ -186,29 +181,79 @@ static void exc_mem(){
 	printk("-> EXCEPCION DE MEMORIA EN PROC %d\n", p_proc_actual->id);
 	liberar_proceso();
 
-        return; /* no debería llegar aqui */
+        return; /* no deberï¿½a llegar aqui */
 }
 
 /*
  * Tratamiento de interrupciones de terminal
  */
 static void int_terminal(){
+	int prioridad = fijar_nivel_int(NIVEL_2);
+	
 	char car;
-
 	car = leer_puerto(DIR_TERMINAL);
-	printk("-> TRATANDO INT. DE TERMINAL %c\n", car);
+	printk("-> TRATANDO INT. DE TERMINAL: %c\n", car);
 
+	if (char_disponibles < TAM_BUF_TERM) {
+		char_buffer[escribir] = car;
+		escribir = (escribir + 1) % TAM_BUF_TERM;
+		char_disponibles++;
+	
+		if (lista_esperando_char.primero != NULL) {
+			
+			BCPptr proc = lista_esperando_char.primero;	
+			eliminar_primero(&lista_esperando_char);
+	
+			proc->estado = LISTO;
+	
+			insertar_ultimo(&lista_listos, proc);
+		}	
+
+	} else {
+		printk("Error al leer: Buffer de lectura de caracteres lleno\n");
+	}
+
+	fijar_nivel_int(prioridad);
         return;
+}
+
+//funciï¿½n para reducir ticks en rodaja RR y comprobar si se debe expulsar el proceso actual
+static void round_robin () {
+	if (p_proc_actual->estado == LISTO) {
+		ticks_restantes--;
+		if (ticks_restantes <= 0) {
+			proc_expulsar = p_proc_actual;			
+			activar_int_SW();
+		}
+	}
 }
 
 /*
  * Tratamiento de interrupciones de reloj
  */
 static void int_reloj(){
-
-	printk("-> TRATANDO INT. DE RELOJ\n");
-
+	int interrupcion=fijar_nivel_int(NIVEL_3);
+	printk(/*"-> TRATANDO INT. DE RELOJ\n"*/"");
+	actualizar_bloqueados();
+	round_robin();
+	fijar_nivel_int(interrupcion);
         return;
+}
+
+//funciï¿½n para reducir la cuenta en procesos bloqueados y devolver a listo si procede
+static void actualizar_bloqueados (){
+	BCPptr bcp_act = lista_bloqueados.primero;
+	while (bcp_act != NULL) {
+		bcp_act->tiempo_bloqueado--;
+		BCPptr bcp_aux = bcp_act->siguiente;
+		if (bcp_act->tiempo_bloqueado <= 0) {
+			eliminar_elem(&lista_bloqueados, bcp_act);
+			bcp_act->estado=LISTO;
+			insertar_ultimo(&lista_listos, bcp_act);
+		}
+		bcp_act = bcp_aux;
+	}
+	return;
 }
 
 /*
@@ -231,8 +276,25 @@ static void tratar_llamsis(){
  */
 static void int_sw(){
 
+	int interrupcion = fijar_nivel_int(NIVEL_1);
 	printk("-> TRATANDO INT. SW\n");
 
+	if (p_proc_actual != NULL && p_proc_actual == proc_expulsar) {
+		
+		BCPptr proc = p_proc_actual;		
+		int interrupcion = fijar_nivel_int(NIVEL_3);
+
+		eliminar_elem(&lista_listos, proc);
+		insertar_ultimo(&lista_listos, proc);		
+		p_proc_actual = planificador();
+		printk("-> C.CONTEXTO POR FIN DE RODAJA: de %d a %d\n", proc->id, p_proc_actual->id);
+
+		fijar_nivel_int(interrupcion);
+		cambio_contexto(&(proc->contexto_regs), &(p_proc_actual->contexto_regs));
+
+	}
+
+	fijar_nivel_int(interrupcion);
 	return;
 }
 
@@ -266,7 +328,10 @@ static int crear_tarea(char *prog){
 			&(p_proc->contexto_regs));
 		p_proc->id=proc;
 		p_proc->estado=LISTO;
-
+		
+		for (int i = 0; i <	NUM_MUT_PROC; i++) {
+			p_proc->lista_mutex[i] = -1;
+		}
 		/* lo inserta al final de cola de listos */
 		insertar_ultimo(&lista_listos, p_proc);
 		error= 0;
@@ -314,6 +379,60 @@ int sis_escribir()
 	return 0;
 }
 
+//Aï¿½ADIDA: CERRAR MUTEX
+int buscar_mutex_proceso(int id) {
+
+	for (int i = 0; i < NUM_MUT_PROC; i++) {
+		if (p_proc_actual->lista_mutex[i] == id) {
+			return i;
+		}	
+	}
+
+	return -1;	
+}
+
+int cerrar_mutex_aux(int mutexid){	
+	int prioridad = fijar_nivel_int(NIVEL_1);
+
+	int mutex_pos = buscar_mutex_proceso(mutexid);
+	if (mutex_pos < 0) {
+		printk ("Error al cerrar mutex: el proceso %i no contiene el mutex indicado\n", p_proc_actual->id);
+
+		fijar_nivel_int(prioridad);
+		return -2;
+	}
+
+	p_proc_actual->lista_mutex[mutex_pos] = -1;
+	lista_mutex_global[mutexid].cuenta_procesos--;
+	if (lista_mutex_global[mutexid].usando == p_proc_actual) {
+		lista_mutex_global[mutexid].contador = 0;
+		lista_mutex_global[mutexid].usando = NULL;
+
+		if (lista_mutex_global[mutexid].esperando.primero != NULL) {
+			BCPptr proc = lista_mutex_global[mutexid].esperando.primero;	
+			eliminar_primero(&lista_mutex_global[mutexid].esperando);
+	
+			proc->estado = LISTO;
+	
+			insertar_ultimo(&lista_listos, proc);
+		}
+	}
+
+	if (lista_mutex_global[mutexid].cuenta_procesos == 0) {
+		lista_mutex_global[mutexid].activo = 0;
+		if (lista_esperando_mutex.primero != NULL) {
+			BCPptr proc_aux = lista_esperando_mutex.primero;
+			eliminar_primero(&lista_esperando_mutex);
+			insertar_ultimo(&lista_listos, proc_aux);
+			proc_aux->estado = LISTO;
+		}
+	}
+
+	fijar_nivel_int(prioridad);	
+	return 0;
+
+}
+
 /*
  * Tratamiento de llamada al sistema terminar_proceso. Llama a la
  * funcion auxiliar liberar_proceso
@@ -321,15 +440,21 @@ int sis_escribir()
 int sis_terminar_proceso(){
 
 	printk("-> FIN PROCESO %d\n", p_proc_actual->id);
+	
+	for (int i = 0; i < NUM_MUT_PROC; i++) {
+		if (p_proc_actual->lista_mutex[i] >= 0) {
+			cerrar_mutex_aux(p_proc_actual->lista_mutex[i]);
+		}
+	}
 
 	liberar_proceso();
 
-        return 0; /* no debería llegar aqui */
+        return 0; /* no deberï¿½a llegar aqui */
 }
 
 /*
  *
- * Rutina de inicialización invocada en arranque
+ * Rutina de inicializaciï¿½n invocada en arranque
  *
  */
 int main(){
@@ -340,13 +465,23 @@ int main(){
 	instal_man_int(INT_RELOJ, int_reloj); 
 	instal_man_int(INT_TERMINAL, int_terminal); 
 	instal_man_int(LLAM_SIS, tratar_llamsis); 
-	instal_man_int(INT_SW, int_sw); 
+	instal_man_int(INT_SW, int_sw);
 
 	iniciar_cont_int();		/* inicia cont. interr. */
 	iniciar_cont_reloj(TICK);	/* fija frecuencia del reloj */
 	iniciar_cont_teclado();		/* inici cont. teclado */
 
 	iniciar_tabla_proc();		/* inicia BCPs de tabla de procesos */
+
+	//lista mutex a 0
+	for (int i = 0; i < NUM_MUT; i++) {
+		lista_mutex_global[i].activo = 0;
+	}
+
+	//inicializamos buffer de caracteres
+	leer = 0;
+	escribir = 0;
+	char_disponibles = 0;
 
 	/* crea proceso inicial */
 	if (crear_tarea((void *)"init")<0)
@@ -357,4 +492,267 @@ int main(){
 	cambio_contexto(NULL, &(p_proc_actual->contexto_regs));
 	panico("S.O. reactivado inesperadamente");
 	return 0;
+}
+
+//funciones aï¿½adidas
+int sis_obtener_id_pr(){
+        return p_proc_actual->id;
+}
+
+int sis_dormir(){
+
+	unsigned int segundos = (unsigned int)leer_registro(1);
+		
+	int interrupcion = fijar_nivel_int(NIVEL_3);
+	
+	BCPptr proc = p_proc_actual;	
+	proc->estado = BLOQUEADO;
+	eliminar_elem(&lista_listos, proc);
+	
+	proc->tiempo_bloqueado = segundos*TICK;
+	insertar_ultimo(&lista_bloqueados, proc);	
+	
+	p_proc_actual = planificador();
+	printk("-> C.CONTEXTO POR BLOQ: de %d a %d\n", proc->id, p_proc_actual->id);
+	fijar_nivel_int(interrupcion);
+	cambio_contexto(&(proc->contexto_regs), &(p_proc_actual->contexto_regs));
+	
+	return 0;
+}
+
+int get_mutex_libre () {
+	for (int i = 0; i < NUM_MUT; i++) {
+		if (lista_mutex_global[i].activo == 0) {
+			lista_mutex_global[i].activo = 1;
+			return i;
+		}	
+	}
+	return -1;
+}
+
+int get_mutex_libre_proc () {
+	for (int i = 0; i < NUM_MUT_PROC; i++) {
+		if (p_proc_actual->lista_mutex[i] < 0) {
+			return i;
+		}	
+	}
+	return -1;
+}
+
+int abrir_mutex_aux(char* nombre){	
+	int prioridad = fijar_nivel_int(NIVEL_1);	
+
+	int mutex_proc_asignar = -1;
+	
+		mutex_proc_asignar = get_mutex_libre_proc();
+
+		if(mutex_proc_asignar<0){
+			printk("Error al abrir mutex: el proceso %i ya tiene todos sus mutex abiertos.\n",p_proc_actual->id);
+	
+			fijar_nivel_int(prioridad);
+			return -1;
+		}else{
+	
+			for (int i = 0; i < NUM_MUT; i++) {
+				if (lista_mutex_global[i].activo == 1 &&
+						strcmp (lista_mutex_global[i].nombre, nombre) == 0) {
+
+					p_proc_actual->lista_mutex[mutex_proc_asignar] = i;
+					lista_mutex_global[i].cuenta_procesos++;
+			
+					fijar_nivel_int(prioridad);		
+					return i;
+				}
+			}
+
+			printk("Error al abrir mutex: el nombre \"%s\" no corresponde a ningï¿½n mutex activo\n", nombre);
+			
+			fijar_nivel_int(prioridad);	
+			return -2;
+		}
+}
+
+int sis_crear_mutex(){	
+	int prioridad = fijar_nivel_int(NIVEL_1);
+
+	char* nombre = (char*)leer_registro(1);
+	int tipo = (int)leer_registro(2);
+	int mutex_asignado = -1;
+	
+	if (strlen(nombre) > (MAX_NOM_MUT - 1)) {
+		nombre[MAX_NOM_MUT] = '\0';
+	}
+
+	do {
+		for (int i = 0; i < NUM_MUT; i++) {
+			if (lista_mutex_global[i].activo == 1 &&
+					strcmp (lista_mutex_global[i].nombre, nombre) == 0) {
+				printk("Error en creaciï¿½n de mutex: el nombre \"%s\" ya esta tomado\n", nombre);
+
+				fijar_nivel_int(prioridad);
+				return -1;
+			}
+		}
+
+		mutex_asignado = get_mutex_libre();
+		if (mutex_asignado < 0){
+		
+			BCPptr proc = p_proc_actual;			
+			proc->estado = BLOQUEADO;
+
+			int interrupcion = fijar_nivel_int(NIVEL_3);
+				
+			eliminar_elem(&lista_listos, proc);
+		
+			
+			insertar_ultimo(&lista_esperando_mutex, proc);	
+				
+			p_proc_actual = planificador();
+			printk("-> C.CONTEXTO POR BLOQ (MUTEX): de %d a %d\n", proc->id, p_proc_actual->id);	
+			
+			fijar_nivel_int(interrupcion);
+			cambio_contexto(&(proc->contexto_regs), &(p_proc_actual->contexto_regs));
+		} else {
+			strcpy(lista_mutex_global[mutex_asignado].nombre, nombre);
+			lista_mutex_global[mutex_asignado].recursivo = tipo;
+			lista_mutex_global[mutex_asignado].contador = 0;
+			lista_mutex_global[mutex_asignado].cuenta_procesos = 0;
+			lista_mutex_global[mutex_asignado].activo = 1;
+			lista_mutex_global[mutex_asignado].usando = NULL;
+			abrir_mutex_aux(nombre);
+
+		}
+	} while (mutex_asignado == -1);	
+	
+	fijar_nivel_int(prioridad);
+	return mutex_asignado;
+}
+
+int sis_abrir_mutex(){
+	char* nombre = (char*)leer_registro(1);
+	return abrir_mutex_aux(nombre);	
+}
+
+
+int sis_cerrar_mutex(){
+	unsigned int mutexid = (unsigned int)leer_registro(1);
+	return 	cerrar_mutex_aux(mutexid);
+}
+
+int sis_lock(){	
+	int prioridad = fijar_nivel_int(NIVEL_1);
+
+	unsigned int mutexid = (unsigned int)leer_registro(1);
+
+	if (buscar_mutex_proceso(mutexid) < 0) {
+		printk("Error en lock: el mutex no ha sido abierto por el proceso\n", lista_mutex_global[mutexid].nombre);
+		fijar_nivel_int(prioridad);
+		return -1;
+	}
+
+	int aux;
+	do {
+		aux = 1;
+		if (lista_mutex_global[mutexid].usando == NULL) {
+			lista_mutex_global[mutexid].usando = p_proc_actual;
+			lista_mutex_global[mutexid].contador = 1;
+		} else if (lista_mutex_global[mutexid].usando == p_proc_actual && lista_mutex_global[mutexid].recursivo == RECURSIVO) {
+			lista_mutex_global[mutexid].contador++;
+		} else if (lista_mutex_global[mutexid].usando == p_proc_actual && lista_mutex_global[mutexid].recursivo == NO_RECURSIVO) {
+			printk("Error en lock: mutex \"%s\" no es recursivo y ya estï¿½ bloqueado\n", lista_mutex_global[mutexid].nombre);
+			fijar_nivel_int(prioridad);
+			return -2;
+		} else {
+			aux = 0;
+			BCPptr proc = p_proc_actual;
+			
+			proc->estado = BLOQUEADO;
+			
+
+			int interrupcion = fijar_nivel_int(NIVEL_3);	
+			eliminar_elem(&lista_listos, proc);
+			
+			insertar_ultimo(&lista_mutex_global[mutexid].esperando, proc);	
+				
+			p_proc_actual = planificador();
+			printk("-> C.CONTEXTO POR LOCK (MUTEX): de %d a %d\n", proc->id, p_proc_actual->id);	
+			
+			fijar_nivel_int(interrupcion);
+			cambio_contexto(&(proc->contexto_regs), &(p_proc_actual->contexto_regs));
+		}
+	} while (!aux);
+
+	fijar_nivel_int(prioridad);
+	return 0;
+}
+
+int sis_unlock(){
+	int prioridad = fijar_nivel_int(NIVEL_1);
+	
+	unsigned int mutexid = (unsigned int)leer_registro(1);
+
+	if (buscar_mutex_proceso(mutexid) < 0) {
+		printk("Error en unlock: el mutex no ha sido abierto por el proceso\n", lista_mutex_global[mutexid].nombre);
+		fijar_nivel_int(prioridad);
+		return -1;
+	}
+
+	if (lista_mutex_global[mutexid].usando != p_proc_actual) {
+		printk("Error en unlock: el mutex \"%s\" no ha sido bloqueado por el proceso\n", lista_mutex_global[mutexid].nombre);
+		fijar_nivel_int(prioridad);
+		return -2;
+	} else if (lista_mutex_global[mutexid].contador == 0) {
+		printk("Error en unlock: error inesperado; el mutex\"%s\" esta bloqueado con valor 0\n", lista_mutex_global[mutexid].nombre);
+		fijar_nivel_int(prioridad);
+		return -3;
+	}
+
+	lista_mutex_global[mutexid].contador--;
+	
+	if(lista_mutex_global[mutexid].contador == 0) {
+		lista_mutex_global[mutexid].usando = NULL;
+
+		if (lista_mutex_global[mutexid].esperando.primero != NULL) {
+			BCPptr proc = lista_mutex_global[mutexid].esperando.primero;	
+			eliminar_primero(&lista_mutex_global[mutexid].esperando);
+		
+			proc->estado = LISTO;
+		
+			insertar_ultimo(&lista_listos, proc);	
+		}
+	}
+	fijar_nivel_int(prioridad);
+	return 0;
+}
+
+int sis_leer_caracter(){
+	int prioridad = fijar_nivel_int(NIVEL_1);
+	char aux = -1;
+
+	do {
+		if (char_disponibles > 0) {
+			aux = char_buffer[leer];
+			leer = (leer + 1) % TAM_BUF_TERM;	
+			char_disponibles--;
+		} else {
+			BCPptr proc = p_proc_actual;			
+			proc->estado = BLOQUEADO;
+
+			int interrupcion = fijar_nivel_int(NIVEL_3);
+				
+			eliminar_elem(&lista_listos, proc);
+		
+			
+			insertar_ultimo(&lista_esperando_char, proc);
+				
+			p_proc_actual = planificador();
+			printk("-> C.CONTEXTO POR BLOQ (ESPERANDO CHAR): de %d a %d\n", proc->id, p_proc_actual->id);	
+			
+			fijar_nivel_int(interrupcion);
+			cambio_contexto(&(proc->contexto_regs), &(p_proc_actual->contexto_regs));
+		}
+	} while (aux < 0);
+		
+	fijar_nivel_int(prioridad);
+	return aux;
 }

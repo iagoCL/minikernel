@@ -1,8 +1,3 @@
-#
-# minikernel/Makefile
-#	Makefile del sistema 
-#
-
 INCLUDEDIR=include
 CC=gcc
 CFLAGS=-g -Wall -fPIC -I$(INCLUDEDIR)
